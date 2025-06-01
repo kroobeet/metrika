@@ -3,8 +3,8 @@ from pathlib import Path
 from typing import Dict, Any
 import logging
 
-from models import ApiConfig
-from exceptions import ConfigError
+from .models import ApiConfig
+from .exceptions import ConfigError
 
 
 logger = logging.getLogger(__name__)

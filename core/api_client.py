@@ -3,8 +3,8 @@ import logging
 from typing import Dict, Any
 import requests
 
-from models import ReportParams, Location
-from exceptions import MetrikaApiError
+from .models import ReportParams, Location
+from .exceptions import MetrikaApiError
 
 logger = logging.getLogger(__name__)
 

@@ -2,8 +2,8 @@ from typing import Dict, List, Any
 from datetime import datetime
 import logging
 
-from models import ReportData, Location
-from exceptions import DataProcessingError
+from .models import ReportData, Location
+from .exceptions import DataProcessingError
 
 
 logger = logging.getLogger(__name__)
