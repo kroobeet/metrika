@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 
 @dataclass
 class ApiConfig:
-    """Stores API configuration"""
+    """Stores API configuration."""
     client_id: str
     client_secret: str
     api_token: str
@@ -14,7 +14,7 @@ class ApiConfig:
 
 @dataclass
 class Location:
-    """Represents a location for reporting"""
+    """Represents a location for reporting."""
     name: str
     region: str
     selected: bool = False
@@ -40,7 +40,7 @@ class ReportData:
     visits: int
     users: int
     pageviews: int
-    traffic_source: str = None
+    traffic_source: Optional[str] = None
     bounce_rate: Optional[float] = None
     page_depth: Optional[float] = None
     avg_visit_duration: Optional[float] = None
