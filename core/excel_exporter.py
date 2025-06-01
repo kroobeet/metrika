@@ -1,40 +1,81 @@
-import openpyxl
+import logging
+
 from typing import Dict, List, Any
 from pathlib import Path
 from openpyxl.styles import Font, Alignment
+from openpyxl.workbook import Workbook
+
 from .models import ReportData
+from .exceptions import ExcelExportError
+
+logger = logging.getLogger(__name__)
 
 
 class ExcelExporter:
-    def __init__(self):
-        self._header_font = Font(bold=True)
-        self._center_alignment = Alignment(horizontal='center')
+    """Exports report data to Excel format."""
 
-    def export_report(self, data: Dict[str, List[ReportData]], file_path: Path,
-                      date_from: str, date_to: str, filters: str = "") -> bool:
-        """Экспорт отчета в Excel файл"""
+    HEADER_FONT = Font(bold=True)
+    CENTER_ALIGNMENT = Alignment(horizontal='center')
+    SHEET_NAME_MAX_LENGTH = 31
+
+    TRAFFIC_HEADERS = {
+        'organic': "Поисковые",
+        'direct': "Прямые",
+        'ad': "Реклама",
+        'internal': "Внутренние",
+        'referral': "Ссылки",
+        'recommendation': "Рекомендации",
+        'social': "Соцсети"
+    }
+
+    def export_report(
+            self,
+            data: Dict[str, List[ReportData]],
+            file_path: Path,
+            date_from: str,
+            date_to: str,
+            filters: str = ""
+    ) -> None:
+        """Export report data to Excel file.
+
+        Args:
+            data: Dictionary with location names as keys and report data as values
+            file_path: Path to save Excel file
+            date_from: Start date of report period
+            date_to: End date of report period
+            filters: Applied filters description
+
+        Raises:
+            ExcelExportError: If export fails
+        """
         try:
-            wb = openpyxl.Workbook()
+            wb = Workbook()
             wb.remove(wb.active)
 
-            # Создаем сводный лист
             self._create_summary_sheet(wb, data, date_from, date_to, filters)
 
-            # Создаем листы для каждого города
             for location, report_data in data.items():
                 self._create_city_sheet(wb, location, report_data, date_from, date_to, filters)
 
-            # Сохраняем файл
             wb.save(file_path)
-            return True
+            logger.info("Report successfully exported to %s", file_path)
         except Exception as e:
-            raise Exception(f"Ошибка при экспорте в Excel: {str(e)}")
+            error_msg = f"Failed to export report: {str(e)}"
+            logger.error(error_msg)
+            raise ExcelExportError(error_msg) from e
 
-    def _create_summary_sheet(self, wb, data, date_from, date_to, filters):
-        """Создание сводного листа"""
+    def _create_summary_sheet(
+            self,
+            wb: Workbook,
+            data: Dict[str, List[ReportData]],
+            date_from: str,
+            date_to: str,
+            filters: str
+    ) -> None:
+        """Create summary sheet in workbook."""
         ws = wb.create_sheet(title="Сводка")
 
-        # Заголовок отчета
+        # Report header
         ws.append([f"Отчет за период с {date_from} по {date_to}"])
         ws.append(["Название отчета: Яндекс.Метрика - Аналитика по городам"])
 
@@ -44,41 +85,25 @@ class ExcelExporter:
         ws.append(["Атрибуция: Последний значимый переход"])
         ws.append([])
 
-        # Заголовок таблицы
+        # Table headers
         headers = [
             "Регион", "Город", "Визиты", "Посетители", "Просмотры",
             "Глубина просмотра"
         ]
-
-        # Добавляем заголовки для всех возможных источников трафика
-        traffic_headers = {
-            'organic': "Поисковые",
-            'direct': "Прямые",
-            'ad': "Реклама",
-            'internal': "Внутренние",
-            'referral': "Ссылки",
-            'recommendation': "Рекомендации",
-            'social': "Соцсети"
-        }
-
-        # Добавляем заголовки источников
-        for header in traffic_headers.values():
-            headers.append(header)
+        headers.extend(self.TRAFFIC_HEADERS.values())
 
         ws.append(headers)
 
-        # Применяем стили к заголовкам
+        # Apply styles to headers
         for cell in ws[7]:
-            cell.font = self._header_font
-            cell.alignment = self._center_alignment
+            cell.font = self.HEADER_FONT
+            cell.alignment = self.CENTER_ALIGNMENT
 
-        # Данные
+        # Add data rows
         for location, report_data in data.items():
             region, city = location.split(" - ")
             totals = self._calculate_totals(report_data)
-            all_visits = totals['all']['visits']
 
-            # Создаем строку с данными
             row_data = [
                 region,
                 city,
@@ -88,39 +113,47 @@ class ExcelExporter:
                 totals['all']['pageviews'] / totals['all']['visits'] if totals['all']['visits'] > 0 else 0
             ]
 
-            # Добавляем данные по всем источникам трафика в том же порядке, что и заголовки
-            for source_key in traffic_headers.keys():
-                row_data.append(totals['sources'].get(source_key, {}).get('visits', 0))
+            # Add traffic source data in same order as headers
+            row_data.extend(
+                totals['sources'].get(source_key, {}).get('visits', 0)
+                for source_key in self.TRAFFIC_HEADERS.keys()
+            )
 
             ws.append(row_data)
 
-    def _create_city_sheet(self, wb, location, report_data, date_from, date_to, filters):
-        """Создание листа для конкретного города"""
+    def _create_city_sheet(
+            self,
+            wb: Workbook,
+            location: str,
+            report_data: List[ReportData],
+            date_from: str,
+            date_to: str,
+            filters: str
+    ) -> None:
+        """Create sheet for specific city."""
         _, city = location.split(" - ")
-        ws = wb.create_sheet(title=city[:31])  # Ограничение длины названия листа
+        ws = wb.create_sheet(title=city[:self.SHEET_NAME_MAX_LENGTH])
 
-        # Заголовок отчета
+        # Report header
         ws.append([f"Отчет за период с {date_from} по {date_to}"])
         ws.append([f"Название отчета: Яндекс.Метрика - {city}"])
 
         if filters:
             ws.append([f"Фильтры: {filters} и Город = '{city}'"])
 
-        ws.append(["Атрибуция: Последний значимый переход"])  # Исправлено - добавлены квадратные скобки
+        ws.append(["Атрибуция: Последний значимый переход"])
         ws.append([])
 
-        # Заголовки таблицы
-        headers = [
-            "Дата", "Визиты", "Посетители", "Глубина просмотра"
-        ]
+        # Table headers
+        headers = ["Дата", "Визиты", "Посетители", "Глубина просмотра"]
         ws.append(headers)
 
-        # Применяем стили к заголовкам
+        # Apply styles to headers
         for cell in ws[6]:
-            cell.font = self._header_font
-            cell.alignment = self._center_alignment
+            cell.font = self.HEADER_FONT
+            cell.alignment = self.CENTER_ALIGNMENT
 
-        # Данные
+        # Add data rows
         for item in report_data:
             ws.append([
                 item.date.strftime("%Y-%m-%d"),
@@ -131,18 +164,13 @@ class ExcelExporter:
 
     @staticmethod
     def _calculate_totals(data: List[ReportData]) -> Dict[str, Any]:
-        """Расчет итоговых значений для набора данных с разбивкой по источникам"""
+        """Calculate totals for report data."""
         totals = {
-            'all': {
-                'visits': 0,
-                'users': 0,
-                'pageviews': 0
-            },
+            'all': {'visits': 0, 'users': 0, 'pageviews': 0},
             'sources': {}
         }
 
-        # Маппинг для соответствия ключей
-        source_mapping = {
+        SOURCE_MAPPING = {
             'search': 'organic',
             'direct': 'direct',
             'ad': 'ad',
@@ -153,15 +181,14 @@ class ExcelExporter:
         }
 
         for item in data:
-            # Общие итоги
+            # Update overall totals
             totals['all']['visits'] += item.visits
             totals['all']['users'] += item.users
             totals['all']['pageviews'] += item.pageviews
 
-            # Итоги по источникам трафика
+            # Update source-specific totals
             source = getattr(item, 'traffic_source', 'other')
-            # Преобразуем источник согласно маппингу
-            mapped_source = source_mapping.get(source, source)
+            mapped_source = SOURCE_MAPPING.get(source, source)
 
             if mapped_source not in totals['sources']:
                 totals['sources'][mapped_source] = {
