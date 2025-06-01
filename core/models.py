@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 
 @dataclass
 class ApiConfig:
+    """Stores API configuration"""
     client_id: str
     client_secret: str
     api_token: str
@@ -13,6 +14,7 @@ class ApiConfig:
 
 @dataclass
 class Location:
+    """Represents a location for reporting"""
     name: str
     region: str
     selected: bool = False
@@ -20,6 +22,7 @@ class Location:
 
 @dataclass
 class ReportParams:
+    """Parameters for generating a report."""
     date_from: date
     date_to: date
     counter_id: str
@@ -31,6 +34,7 @@ class ReportParams:
 
 @dataclass
 class ReportData:
+    """Stores processed report data."""
     location: Location
     date: date
     visits: int
