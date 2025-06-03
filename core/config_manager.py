@@ -52,10 +52,10 @@ class ConfigManager:
             with open(config_file, "r", encoding="utf-8") as f:
                 config_data = json.load(f)
                 return ApiConfig(
-                    client_id=config_data["client_id", ""],
-                    client_secret=config_data["client_secret", ""],
-                    api_token=config_data["api_token", ""],
-                    refresh_token=config_data["refresh_token", ""],
+                    client_id=config_data.get("client_id", ""),
+                    client_secret=config_data.get("client_secret", ""),
+                    api_token=config_data.get("api_token", ""),
+                    refresh_token=config_data.get("refresh_token", "")
                 )
         except (json.JSONDecodeError, OSError) as e:
             error_msg = f"Failed to load API config: {str(e)}"
