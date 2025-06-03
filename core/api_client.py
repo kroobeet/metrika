@@ -125,13 +125,18 @@ class MetrikaApiClient:
             "ids": params.counter_id,
             "date1": params.date_from.strftime("%Y-%m-%d"),
             "date2": params.date_to.strftime("%Y-%m-%d"),
-            "metrics": f"{GROUP_MAP[params.grouping, 'ym:s:date']},ym:s:trafficSource",
+            "metrics": "ym:s:visits,ym:s:users,ym:s:pageviews",
+            "dimensions": f"{GROUP_MAP.get(params.grouping, 'ym:s:date')},ym:s:trafficSource",
             "lang": "ru",
             "limit": 10000,
             "accuracy": "full"
         }
 
-        filters = [f"ym:s:regionCityName=={location.name}"]
+        # Filters
+        filters = []
+
+        city_filter = f"ym:s:regionCityName=='{location.name}'"
+        filters.append(city_filter)
 
         # Traffic sources filters
         selected_sources = [k for k, v in params.traffic_sources.items() if v]
