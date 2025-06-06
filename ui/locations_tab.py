@@ -48,13 +48,13 @@ class LocationsTab(QWidget):
             region_item = QTreeWidgetItem(self.locations_tree)
             region_item.setText(0, region)
             region_item.setText(1, "Регион")
-            region_item.setCheckState(0, Qt.Checked if region_data.get("full", False) else Qt.Unchecked)
+            region_item.setCheckState(0, Qt.CheckState.Checked if region_data.get("full", False) else Qt.CheckState.Unchecked)
 
             for city, selected in region_data.get("cities", {}).items():
                 city_item = QTreeWidgetItem(region_item)
                 city_item.setText(0, city)
                 city_item.setText(1, "Город")
-                city_item.setCheckState(0, Qt.Checked if selected else Qt.Unchecked)
+                city_item.setCheckState(0, Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked)
 
         self.locations_tree.expandAll()
         self.locations_tree.itemChanged.connect(self._on_item_changed)
@@ -64,7 +64,7 @@ class LocationsTab(QWidget):
         if column != 0:
             return
 
-        is_checked = item.checkState(0) == Qt.Checked
+        is_checked = item.checkState(0) == Qt.CheckState.Checked
         item_type = item.text(1)
         item_name = item.text(0)
 
@@ -122,7 +122,7 @@ class LocationsTab(QWidget):
 
         # Рекурсивно обходим все элементы дерева
         def walk_tree(item):
-            if item.checkState(0) == Qt.Checked:
+            if item.checkState(0) == Qt.CheckState.Checked:
                 selected_items.append(item)
             for i in range(item.childCount()):
                 walk_tree(item.child(i))
