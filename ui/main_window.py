@@ -145,10 +145,10 @@ class MainWindow(QMainWindow):
         # Формируем строку фильтров
         filters = []
         if report_params.behavior == "human":
-            filters.append("Роботность = 'Люди'")
+            filters.append("robots = 'no'")
         elif report_params.behavior == "robot":
-            filters.append("Роботность = 'Роботы'")
-        filters_str = " и ".join(filters) if filters else ""
+            filters.append("robots = 'yes'")
+        filters_str = " AND ".join(filters) if filters else ""
 
         # Запрашиваем путь для сохранения файла
         file_path, _ = QFileDialog.getSaveFileName(
