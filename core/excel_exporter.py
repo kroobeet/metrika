@@ -5,8 +5,10 @@ from pathlib import Path
 from openpyxl.styles import Font, Alignment
 from openpyxl.workbook import Workbook
 
+from .data_processor import DataProcessor
 from .models import ReportData
 from .exceptions import ExcelExportError
+from .excel_traffic_processor import ExcelTrafficProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,13 @@ class ExcelExporter:
         Raises:
             ExcelExportError: If export fails
         """
+        # Убедимся что папка temp существует
+        temp_dir = Path("temp")
+        temp_dir.mkdir(exist_ok=True)
+
+        # Создаем временный файл для обработки
+        temp_file_path = temp_dir / f"temp_{file_path.name}"
+
         try:
             wb = Workbook()
             wb.remove(wb.active)
@@ -57,12 +66,22 @@ class ExcelExporter:
             for location, report_data in data.items():
                 self._create_city_sheet(wb, location, report_data, date_from, date_to, filters)
 
-            wb.save(file_path)
-            logger.info("Report successfully exported to %s", file_path)
+            wb.save(temp_file_path)
+            logger.info("Initial report successfully exported to %s", temp_file_path)
+
+            # Обрабатываем данные трафика с помощью ExcelTrafficProcessor
+            traffic_processor = ExcelTrafficProcessor(
+                excel_file_path=str(temp_file_path),
+            )
+            traffic_processor.process(output_path=str(file_path))
+
+            # Удаляем временный файл
+            temp_file_path.unlink()
+            logger.info("Temporary file %s removed", temp_file_path)
+
         except Exception as e:
-            error_msg = f"Failed to export report: {str(e)}"
-            logger.error(error_msg)
-            raise ExcelExportError(error_msg) from e
+            logger.error("Error during report export: %s", str(e))
+            raise ExcelExportError(f"Failed to export report: {str(e)}")
 
     def _create_summary_sheet(
             self,
@@ -82,7 +101,6 @@ class ExcelExporter:
         if filters:
             ws.append([f"Фильтры: {filters}"])
 
-        ws.append(["Атрибуция: Последний значимый переход"])
         ws.append([])
 
         # Table headers
@@ -95,14 +113,15 @@ class ExcelExporter:
         ws.append(headers)
 
         # Apply styles to headers
-        for cell in ws[7]:
+        header_row = ws.max_row
+        for cell in ws[header_row]:
             cell.font = self.HEADER_FONT
             cell.alignment = self.CENTER_ALIGNMENT
 
         # Add data rows
         for location, report_data in data.items():
             region, city = location.split(" - ")
-            totals = self._calculate_totals(report_data)
+            totals = DataProcessor.calculate_totals(report_data)
 
             row_data = [
                 region,
@@ -113,7 +132,7 @@ class ExcelExporter:
                 totals['all']['pageviews'] / totals['all']['visits'] if totals['all']['visits'] > 0 else 0
             ]
 
-            # Add traffic source data in same order as headers
+            # Add traffic source data from calculated totals
             row_data.extend(
                 totals['sources'].get(source_key, {}).get('visits', 0)
                 for source_key in self.TRAFFIC_HEADERS.keys()
@@ -141,11 +160,10 @@ class ExcelExporter:
         if filters:
             ws.append([f"Фильтры: {filters} и Город = '{city}'"])
 
-        ws.append(["Атрибуция: Последний значимый переход"])
         ws.append([])
 
         # Table headers
-        headers = ["Дата", "Визиты", "Посетители", "Глубина просмотра"]
+        headers = ["Дата", "Источник трафика", "Визиты", "Посетители", "Глубина просмотра"]
         ws.append(headers)
 
         # Apply styles to headers
@@ -155,8 +173,10 @@ class ExcelExporter:
 
         # Add data rows
         for item in report_data:
+            source_name = self.TRAFFIC_HEADERS.get(item.traffic_source, item.traffic_source or "Другие")
             ws.append([
                 item.date.strftime("%Y-%m-%d"),
+                source_name,
                 item.visits,
                 item.users,
                 item.pageviews / item.visits if item.visits > 0 else 0
@@ -167,11 +187,18 @@ class ExcelExporter:
         """Calculate totals for report data."""
         totals = {
             'all': {'visits': 0, 'users': 0, 'pageviews': 0},
-            'sources': {}
+            'sources': {
+                'organic': {'visits': 0, 'users': 0, 'pageviews': 0},
+                'direct': {'visits': 0, 'users': 0, 'pageviews': 0},
+                'ad': {'visits': 0, 'users': 0, 'pageviews': 0},
+                'internal': {'visits': 0, 'users': 0, 'pageviews': 0},
+                'referral': {'visits': 0, 'users': 0, 'pageviews': 0},
+                'social': {'visits': 0, 'users': 0, 'pageviews': 0}
+            }
         }
 
         SOURCE_MAPPING = {
-            'search': 'organic',
+            'organic': 'organic',
             'direct': 'direct',
             'ad': 'ad',
             'internal': 'internal',
@@ -187,18 +214,19 @@ class ExcelExporter:
             totals['all']['pageviews'] += item.pageviews
 
             # Update source-specific totals
-            source = getattr(item, 'traffic_source', 'other')
-            mapped_source = SOURCE_MAPPING.get(source, source)
+            source = getattr(item, 'traffic_source', None)
+            if source in SOURCE_MAPPING:
+                mapped_source = SOURCE_MAPPING[source]
 
-            if mapped_source not in totals['sources']:
-                totals['sources'][mapped_source] = {
-                    'visits': 0,
-                    'users': 0,
-                    'pageviews': 0
-                }
+                if mapped_source not in totals['sources']:
+                    totals['sources'][mapped_source] = {
+                        'visits': 0,
+                        'users': 0,
+                        'pageviews': 0
+                    }
 
-            totals['sources'][mapped_source]['visits'] += item.visits
-            totals['sources'][mapped_source]['users'] += item.users
-            totals['sources'][mapped_source]['pageviews'] += item.pageviews
+                totals['sources'][mapped_source]['visits'] += item.visits
+                totals['sources'][mapped_source]['users'] += item.users
+                totals['sources'][mapped_source]['pageviews'] += item.pageviews
 
         return totals

@@ -106,9 +106,7 @@ class MetrikaApiClient:
             Dictionary of request parameters
         """
         GROUP_MAP = {
-            "По дням": "ym:s:date",
-            "По неделям": "ym:s:week",
-            "По месяцам": "ym:s:month",
+            "По дням": "ym:s:date"
         }
 
         TRAFFIC_MAPPING = {
@@ -126,11 +124,14 @@ class MetrikaApiClient:
             "date1": params.date_from.strftime("%Y-%m-%d"),
             "date2": params.date_to.strftime("%Y-%m-%d"),
             "metrics": "ym:s:visits,ym:s:users,ym:s:pageviews",
-            "dimensions": f"{GROUP_MAP.get(params.grouping, 'ym:s:date')},ym:s:trafficSource",
             "lang": "ru",
             "limit": 10000,
-            "accuracy": "full"
+            "accuracy": "full",
+            "dimensions": GROUP_MAP.get(params.grouping, "ym:s:date")
         }
+        # Если нужен источник трафика, добавьте его в dimensions
+        if params.grouping == "По дням":
+            request_params["dimensions"] += ",ym:s:trafficSource"  # Добавляем источник трафика
 
         # Filters
         filters = []
@@ -138,7 +139,7 @@ class MetrikaApiClient:
         city_filter = f"ym:s:regionCityName=='{location.name}'"
         filters.append(city_filter)
 
-        # Traffic sources filters
+        # Traffic sources filters (only for daily grouping)
         selected_sources = [k for k, v in params.traffic_sources.items() if v]
         if selected_sources:
             sources_filter = [
@@ -147,12 +148,14 @@ class MetrikaApiClient:
             ]
             filters.append(f"({' OR '.join(sources_filter)})")
 
-        # Traffic type filter
+
+        # Traffic type filter (works for all groupings)
         if params.behavior == "human":
             filters.append("ym:s:isRobot=='No'")
         elif params.behavior == "robot":
             filters.append("ym:s:isRobot=='Yes'")
 
-        request_params["filters"] = " AND ".join(filters)
+        if filters:
+            request_params["filters"] = " AND ".join(filters)
 
         return request_params

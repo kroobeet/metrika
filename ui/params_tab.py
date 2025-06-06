@@ -68,7 +68,7 @@ class ParamsTab(QWidget):
         group_layout = QHBoxLayout()
         group_layout.addWidget(QLabel("Группировка:"))
         self.group_combo = QComboBox()
-        self.group_combo.addItems(["По дням", "По неделям", "По месяцам"])
+        self.group_combo.addItems(["По дням"])
         group_layout.addWidget(self.group_combo)
         layout.addLayout(group_layout)
 
