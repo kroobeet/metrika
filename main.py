@@ -1,17 +1,32 @@
 import sys
 import logging
+from pathlib import Path
+
 from PySide6.QtWidgets import QApplication
 from core.config_manager import ConfigManager
 from ui.main_window import MainWindow
 
 
 def setup_logging():
-    """Настройка логирования"""
+    """Настройка логирования и создание каталогов"""
+
+    # Создаём папку temp если её нет
+    temp_dir = Path("temp")
+    temp_dir.mkdir(exist_ok=True)
+
+    # Создаём папку reports если её нет
+    reports_dir = temp_dir / "reports"
+    reports_dir.mkdir(exist_ok=True)
+
+    # Создаём папку presets если её нет
+    presets_dir = temp_dir / "presets"
+    presets_dir.mkdir(exist_ok=True)
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[
-            logging.FileHandler("app.log"),
+            logging.FileHandler("temp/app.log"),
             logging.StreamHandler()
         ]
     )

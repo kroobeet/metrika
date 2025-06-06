@@ -176,4 +176,5 @@ cython_debug/
 # other
 presets/
 configs/api_config.json
-api_response.json
+temp/
+reports/

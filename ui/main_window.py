@@ -92,6 +92,9 @@ class MainWindow(QMainWindow):
             api_client = MetrikaApiClient(oauth_token)
             raw_data = api_client.get_data(report_params)
 
+            # Сохраняем raw_data для использования в экспорте
+            self.raw_data = raw_data
+
             # Обрабатываем данные
             self.results = {}
             for location_key, data in raw_data.items():
@@ -116,7 +119,7 @@ class MainWindow(QMainWindow):
             print("Полученные данные из API:")
             print(json.dumps(raw_data, indent=2, ensure_ascii=False))
 
-            with open('api_response.json', 'w', encoding='utf-8') as f:
+            with open('temp/api_response.json', 'w', encoding='utf-8') as f:
                 json.dump(raw_data, f, ensure_ascii=False, indent=2)
 
             # Отображаем результаты
@@ -142,16 +145,16 @@ class MainWindow(QMainWindow):
         # Формируем строку фильтров
         filters = []
         if report_params.behavior == "human":
-            filters.append("Роботность = 'Люди'")
+            filters.append("robots = 'no'")
         elif report_params.behavior == "robot":
-            filters.append("Роботность = 'Роботы'")
-        filters_str = " и ".join(filters) if filters else ""
+            filters.append("robots = 'yes'")
+        filters_str = " AND ".join(filters) if filters else ""
 
         # Запрашиваем путь для сохранения файла
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Сохранить отчет",
-            f"metrika_report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            f"temp/reports/metrika_report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
             "Excel Files (*.xlsx)"
         )
 
@@ -159,22 +162,20 @@ class MainWindow(QMainWindow):
             return
 
         # Экспортируем данные
-        try:
-            exporter = ExcelExporter()
-            data_to_export = {
-                loc: res['data'] for loc, res in self.results.items()
-            }
+        exporter = ExcelExporter()
+        data_to_export = {
+            loc: res['data'] for loc, res in self.results.items()
+        }
 
-            if exporter.export_report(
-                data=data_to_export,
-                file_path=Path(file_path),
-                date_from=report_params.date_from.strftime("%Y-%m-%d"),
-                date_to=report_params.date_to.strftime("%Y-%m-%d"),
-                filters=filters_str,
-            ):
-                self._show_info(f"Отчет сохранен в {file_path}")
-        except Exception as e:
-            self._show_error(f"Ошибка при экспорте в Excel: {str(e)}")
+        # Передаем raw_data в экспортер
+        exporter.export_report(
+            data=data_to_export,
+            file_path=Path(file_path),
+            date_from=report_params.date_from.strftime("%Y-%m-%d"),
+            date_to=report_params.date_to.strftime("%Y-%m-%d"),
+            filters=filters_str,
+        )
+        self._show_info(f"Отчет сохранен в {file_path}")
 
     def _display_results(self, params: ReportParams):
         """Отображение результатов в интерфейсе"""
