@@ -1,155 +1,132 @@
+"""Клиент для взаимодействия с API Яндекс Метрики"""
+
 import json
 import logging
-from typing import Dict, Any
+from dataclasses import dataclass
+from typing import Dict, Any, Optional
+
 import requests
 
 from .models import ReportParams, Location
 from .exceptions import MetrikaApiError
 
+
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class ApiClientConfig:
+    """Настройка для клиента Metrika API."""
+    base_url: str = "https://api-metrika.yandex.net/stat/v1/data"
+    timeout: int = 30
+
+
 class MetrikaApiClient:
-    """Client for interacting with Yandex Metrika API."""
+    """Управляет взаимодействием с API Яндекс Метрики."""
 
-    BASE_URL = "https://api-metrika.yandex.net/stat/v1/data"
-    TIMEOUT = 30
+    TRAFFIC_MAPPING = {
+        "search": "organic",
+        "direct": "direct",
+        "ad": "ad",
+        "internal": "internal",
+        "referral": "referral",
+        "recommendation": "recommendation",
+        "social": "social",
+    }
 
-    def __init__(self, oauth_token: str):
-        """Initialize the client. with OAuth token.
-
-        Args:
-            oauth_token: Yandex Metrika OAuth token for API authentication.
-        """
+    def __init__(self, oauth_token: str, config: Optional[ApiClientConfig] = None):
+        """Инициализация с помощью токена OAuth и опциональной конфигурации."""
         self.oauth_token = oauth_token
+        self.config = config or ApiClientConfig()
 
     def get_data(self, params: ReportParams) -> Dict[str, Any]:
-        """Fetch data from Yandex Metrika API for given parameters.
+        """Извлекает данные из API Яндекс Метрики.
 
         Args:
-            params: Report parameters including data range, filters etc.
+            params: Параметры отчета, включая диапазон дат, фильтры и т.д.
 
         Returns:
-            Dictionary with location names as keys and API responses as values.
+            Словарь с названиями местоположений в качестве ключей и ответами API в качестве значений.
 
         Raises:
-            MetrikaApiError: If there's an error during API request.
+            MetrikaApiError: Если запрос API завершится неудачей.
         """
         results = {}
 
-        for location in params.locations:
-            if not location.selected:
-                continue
-
+        for location in filter(lambda loc: loc.selected, params.locations):
             try:
                 response = self._make_api_request(params, location)
                 results[f"{location.region} - {location.name}"] = response.json()
-            except requests.exceptions.RequestException as e:
-                error_msg = f"Request error for {location.name}: {str(e)}"
-                logger.error(error_msg)
+            except requests.RequestException as e:
+                error_msg = f"Ошибка запроса для {location.name}: {str(e)}"
+                logger.error(error_msg, exc_info=True)
                 raise MetrikaApiError(error_msg) from e
 
         return results
 
     def _make_api_request(self, params: ReportParams, location: Location) -> requests.Response:
-        """Make an API request for specific location.
-
-        Args:
-            params: Report parameters
-            location: Location to request data for
-
-        Returns:
-            API response
-
-        Raises:
-            requests.exceptions.RequestException: If request fails.
-        """
+        """Выполнение запроса API для конкретного местоположения."""
         request_params = self._build_request_params(params, location)
         headers = {
             "Authorization": f"OAuth {self.oauth_token}",
             "Content-Type": "application/x-yametrika+json",
         }
 
-        logger.info(
-            "Request for location %s:\nURL:%s\nParams:%s",
+        logger.debug(
+            "API запрос для %s:\nПараметры: %s",
             location.name,
-            self.BASE_URL,
             json.dumps(request_params, indent=2, ensure_ascii=False),
         )
 
-        response = requests.get(
-            self.BASE_URL,
-            headers=headers,
-            params=request_params,
-            timeout=self.TIMEOUT,
-        )
-        response.raise_for_status()
+        try:
+            response = requests.get(
+                self.config.base_url,
+                headers=headers,
+                params=request_params,
+                timeout=self.config.timeout,
+            )
+            response.raise_for_status()
+            return response
+        except requests.RequestException as e:
+            logger.error("API запрос не удался: %s", str(e), exc_info=True)
+            raise
 
-        logger.info(
-            "Response for %s:\nStatus: %s\nData: %s",
-            location.name,
-            response.status_code,
-            json.dumps(response.json(), indent=2, ensure_ascii=False),
-        )
+    def _build_request_params(self, params: ReportParams, location: Location) -> Dict[str, Any]:
+        """Построение параметров запроса для вызова API"""
+        grouping_map = {"По дням": "ym:s:date"}
+        dimensions = grouping_map.get(params.grouping, "ym:s:date")
 
-        return response
-
-    @staticmethod
-    def _build_request_params(params: ReportParams, location: Location) -> Dict[str, Any]:
-        """Build request parameters for API call.
-
-        Args:
-            params: Report parameters
-            location: Location to build parameters for
-
-        Returns:
-            Dictionary of request parameters
-        """
-        GROUP_MAP = {
-            "По дням": "ym:s:date"
-        }
-
-        TRAFFIC_MAPPING = {
-            "search": "organic",
-            "direct": "direct",
-            "ad": "ad",
-            "internal": "internal",
-            "referral": "referral",
-            "recommendation": "recommendation",
-            "social": "social",
-        }
+        if params.grouping == "По дням":
+            dimensions += ",ym:s:trafficSource"
 
         request_params = {
             "ids": params.counter_id,
             "date1": params.date_from.strftime("%Y-%m-%d"),
             "date2": params.date_to.strftime("%Y-%m-%d"),
             "metrics": "ym:s:visits,ym:s:users,ym:s:pageviews",
+            "dimensions": dimensions,
             "lang": "ru",
             "limit": 10000,
             "accuracy": "full",
-            "dimensions": GROUP_MAP.get(params.grouping, "ym:s:date")
         }
-        # Если нужен источник трафика, добавьте его в dimensions
-        if params.grouping == "По дням":
-            request_params["dimensions"] += ",ym:s:trafficSource"  # Добавляем источник трафика
 
-        # Filters
-        filters = []
+        # Построение фильтров
+        filters = [
+            f"ym:s:regionCityName=='{location.name}'",
+        ]
 
-        city_filter = f"ym:s:regionCityName=='{location.name}'"
-        filters.append(city_filter)
-
-        # Traffic sources filters (only for daily grouping)
-        selected_sources = [k for k, v in params.traffic_sources.items() if v]
+        # Добавление фильтров источников трафика
+        selected_sources = [
+            src for src, selected in params.traffic_sources.items() if selected
+        ]
         if selected_sources:
-            sources_filter = [
-                f"ym:s:trafficSource=='{TRAFFIC_MAPPING[src]}'"
+            sources_filter = " OR ".join(
+                f"ym:s:trafficSource=='{self.TRAFFIC_MAPPING[src]}'"
                 for src in selected_sources
-            ]
-            filters.append(f"({' OR '.join(sources_filter)})")
+            )
+            filters.append(f"({sources_filter})")
 
-
-        # Traffic type filter (works for all groupings)
+        # Добавляем фильтр поведения
         if params.behavior == "human":
             filters.append("ym:s:isRobot=='No'")
         elif params.behavior == "robot":

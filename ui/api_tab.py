@@ -1,163 +1,225 @@
+"""Вкладка конфигурации API для настройки OAuth Яндекс.Метрики"""
+
+from dataclasses import dataclass
+from typing import Optional
+import webbrowser
+
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QMessageBox)
-from core.models import ApiConfig
+from PySide6.QtCore import Signal
 import requests
+
+from core.models import ApiConfig
+from core.exceptions import ConfigError
+
+
+@dataclass
+class ApiTabConfig:
+    """Настройка элементов пользовательского интерфейса на вкладке API."""
+    client_id_label: str = "Client ID:"
+    client_secret_label: str = "Client Secret:"
+    auth_code_label: str = "Authorization Code:"
+    auth_code_placeholder: str = "Вставьте код из браузера здесь"
+    token_label: str = "API Токен:"
+    get_code_btn_text: str = "Получить код"
+    load_token_btn_text: str = "Загрузить API токен"
+    save_config_btn_text: str = "Сохранить настройки"
 
 
 class ApiTab(QWidget):
-    def __init__(self, config_manager):
+    """Виджет для управления API и настройкой OAuth Яндекс.Метрики"""
+
+    token_updated = Signal(str)  # Сигнал отправляемый при обновлении токена
+
+    OAUTH_URL = "https://oauth.yandex.ru/authorize"
+    TOKEN_URL = "https://oauth.yandex.ru/token"
+
+    def __init__(self, config_manager, config: Optional[ApiConfig] = None):
         super().__init__()
         self.config_manager = config_manager
+        self.ui_config = config or ApiTabConfig()
         self._init_ui()
         self._load_config()
 
-    def _init_ui(self):
-        """Инициализация пользовательского интерфейса"""
+    def _init_ui(self) -> None:
+        """Инициализация компонентов пользовательского интерфейса"""
         layout = QVBoxLayout()
 
-        # Поля для ввода данных API
-        client_id_layout = QHBoxLayout()
-        client_id_layout.addWidget(QLabel("Client ID:"))
-        self.client_id_input = QLineEdit()
-        client_id_layout.addWidget(self.client_id_input)
-        layout.addLayout(client_id_layout)
+        # Поле Client ID
+        self.client_id_input = self._create_input_field(
+            self.ui_config.client_id_label, layout
+        )
 
-        client_secret_layout = QHBoxLayout()
-        client_secret_layout.addWidget(QLabel("Client Secret:"))
-        self.client_secret_input = QLineEdit()
-        client_secret_layout.addWidget(self.client_secret_input)
-        layout.addLayout(client_secret_layout)
+        # Поле Client Secret
+        self.client_secret_input = self._create_input_field(
+            self.ui_config.client_secret_label, layout
+        )
 
-        # Поле для авторизационного кода
-        auth_code_layout = QHBoxLayout()
-        auth_code_layout.addWidget(QLabel("Авторизационный код:"))
+        # Поле Authorization Code
         self.auth_code_input = QLineEdit()
-        self.auth_code_input.setPlaceholderText("Вставьте сюда код из браузера")
+        self.auth_code_input.setPlaceholderText(self.ui_config.auth_code_placeholder)
         self.auth_code_input.textChanged.connect(self._toggle_load_token_btn)
-        auth_code_layout.addWidget(self.auth_code_input)
-        layout.addLayout(auth_code_layout)
+        self._add_labeled_field(
+            self.ui_config.auth_code_label,
+            self.auth_code_input,
+            layout
+        )
 
-        # Кнопка для загрузки токена
-        self.load_token_btn = QPushButton("Загрузить API токен")
+        # Кнопка "Загрузить токен"
+        self.load_token_btn = QPushButton(self.ui_config.load_token_btn_text)
         self.load_token_btn.clicked.connect(self._load_api_token)
         self.load_token_btn.setVisible(False)
         layout.addWidget(self.load_token_btn)
 
-        # Поле для API токена
-        token_layout = QHBoxLayout()
-        token_layout.addWidget(QLabel("API Token:"))
+        # Отображение токена
         self.token_input = QLineEdit()
         self.token_input.setReadOnly(True)
-        token_layout.addWidget(self.token_input)
-        layout.addLayout(token_layout)
+        self._add_labeled_field(
+            self.ui_config.token_label,
+            self.token_input,
+            layout
+        )
 
-        # Кнопки для работы с API
-        api_buttons_layout = QHBoxLayout()
+        # Кнопки действий
+        button_layout = QHBoxLayout()
 
-        self.get_token_btn = QPushButton("Получить код")
+        self.get_token_btn = QPushButton(self.ui_config.get_code_btn_text)
         self.get_token_btn.clicked.connect(self._get_auth_code)
-        api_buttons_layout.addWidget(self.get_token_btn)
+        button_layout.addWidget(self.get_token_btn)
 
-        self.save_api_btn = QPushButton("Сохранить настройки")
+        self.save_api_btn = QPushButton(self.ui_config.save_config_btn_text)
         self.save_api_btn.clicked.connect(self._save_config)
-        api_buttons_layout.addWidget(self.save_api_btn)
+        button_layout.addWidget(self.save_api_btn)
 
-        layout.addLayout(api_buttons_layout)
+        layout.addLayout(button_layout)
         self.setLayout(layout)
 
-    def _toggle_load_token_btn(self, text):
-        """Показывает/скрывает кнопку загрузки токена"""
+    def _create_input_field(self, label_text: str, parent_layout: QVBoxLayout) -> QLineEdit:
+        """Создание меток для полей ввода"""
+        input_field = QLineEdit()
+        self._add_labeled_field(label_text, input_field, parent_layout)
+        return input_field
+
+    @staticmethod
+    def _add_labeled_field(label_text: str, labeled_field: QLineEdit, layout: QVBoxLayout) -> None:
+        """Добавление меток полей в макет"""
+        field_layout = QHBoxLayout()
+        field_layout.addWidget(QLabel(label_text))
+        field_layout.addWidget(labeled_field)
+        layout.addLayout(field_layout)
+
+    def _toggle_load_token_btn(self, text: str) -> None:
+        """Переключение видимости кнопки загрузки токена в зависимости от введённых данных"""
         self.load_token_btn.setVisible(bool(text.strip()))
 
-    def _load_config(self):
-        """Загрузка конфигурации API"""
+    def _load_config(self) -> None:
+        """Загрузка конфигурации API из менеджера конфигурации"""
         try:
             config = self.config_manager.load_api_config()
             self.client_id_input.setText(config.client_id)
             self.client_secret_input.setText(config.client_secret)
             self.token_input.setText(config.api_token)
-        except Exception as e:
-            QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить конфигурацию: {str(e)}")
+        except ConfigError as e:
+            QMessageBox.warning(
+                self,
+                "Ошибка конфигурации",
+                f"Ошибка загрузки конфига: {str(e)}"
+            )
 
-    def _get_auth_code(self):
-        """Получение авторизационного кода"""
+    def _get_auth_code(self) -> None:
+        """Открытие браузера, чтобы получить код авторизации"""
         client_id = self.client_id_input.text().strip()
         if not client_id:
-            QMessageBox.warning(self, "Ошибка", "Введите Client ID!")
+            QMessageBox.warning(self, "Ошибка", "Поле Client ID является обязательным!")
             return
 
         try:
-            import webbrowser
-            url = f"https://oauth.yandex.ru/authorize?response_type=code&client_id={client_id}"
-            webbrowser.open(url)
-            QMessageBox.information(self, "Получение кода",
-                                    "Браузер открыт для получения кода. "
-                                    "После авторизации скопируйте код в поле 'Авторизационный код'")
+            auth_url = f"{self.OAUTH_URL}?response_type=code&client_id={client_id}"
+            webbrowser.open(auth_url)
+            QMessageBox.information(
+                self,
+                "Авторизация",
+                "Браузер открыт для авторизации. Пожалуйста, скопируйте код после входа."
+            )
         except Exception as e:
-            QMessageBox.warning(self, "Ошибка", f"Не удалось открыть браузер: {str(e)}")
+            QMessageBox.warning(
+                self,
+                "Ошибка браузера",
+                f"Не получилось открыть браузер: {str(e)}"
+            )
 
-    def _load_api_token(self):
-        """Получение API токена по авторизационному коду"""
-        auth_code = self.auth_code_input.text().strip()
-        client_id = self.client_id_input.text().strip()
-        client_secret = self.client_secret_input.text().strip()
+    def _load_api_token(self) -> None:
+        """Обмен кода авторизации на API токен"""
+        required_fields = {
+            "Authorization Code": self.auth_code_input.text().strip(),
+            "Client ID": self.client_id_input.text().strip(),
+            "Client Secret": self.client_secret_input.text().strip(),
+        }
 
-        if not auth_code:
-            QMessageBox.warning(self, "Ошибка", "Введите авторизационный код!")
-            return
-        if not client_id:
-            QMessageBox.warning(self, "Ошибка", "Введите Client ID!")
-            return
-        if not client_secret:
-            QMessageBox.warning(self, "Ошибка", "Введите Client Secret!")
-            return
+        for field_name, value in required_fields.items():
+            if not value:
+                QMessageBox.warning(self, "Ошибка ввода", f"Поле '{field_name}' является обязательным!")
+                return
 
         try:
             response = requests.post(
-                "https://oauth.yandex.ru/token",
+                self.TOKEN_URL,
                 data={
                     "grant_type": "authorization_code",
-                    "code": auth_code,
-                    "client_id": client_id,
-                    "client_secret": client_secret
+                    "code": required_fields["Authorization Code"],
+                    "client_id": required_fields["Client ID"],
+                    "client_secret": required_fields["Client Secret"]
                 },
                 timeout=10
             )
             response.raise_for_status()
 
             token_data = response.json()
-            self.token_input.setText(token_data.get("access_token", ""))
+            self.token_input.setText(token_data["access_token", ""])
+            self.token_updated.emit(token_data["access_token", ""])
 
-            # Сохраняем refresh_token в конфиг
             config = ApiConfig(
-                client_id=client_id,
-                client_secret=client_secret,
+                client_id=required_fields["Client ID"],
+                client_secret=required_fields["Client Secret"],
                 api_token=token_data.get("access_token", ""),
                 refresh_token=token_data.get("refresh_token", "")
             )
             self.config_manager.save_api_config(config)
 
-            QMessageBox.information(self, "Успех", "API токен успешно получен и сохранён!")
-        except requests.exceptions.RequestException as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось получить токен: {str(e)}")
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Ошибка при сохранении токена: {str(e)}")
+            QMessageBox.information(
+                self,
+                "Успех",
+                "API токен успешно получен и сохранён!"
+            )
+        except requests.RequestException as e:
+            QMessageBox.critical(
+                self,
+                "Ошибка API",
+                f"Не удалось получить токен: {str(e)}"
+            )
 
-    def _save_config(self):
-        """Сохранение конфигурации API"""
+    def _save_config(self) -> None:
+        """Сохранение текущей конфигурации"""
         try:
             config = ApiConfig(
                 client_id=self.client_id_input.text().strip(),
                 client_secret=self.client_secret_input.text().strip(),
                 api_token=self.token_input.text().strip(),
-                refresh_token=""  # Сохраняем существующий refresh_token
+                refresh_token=""  # Preserve existing refresh token
+            )
+            self.config_manager.save_api_config(config)
+            QMessageBox.information(
+                self,
+                "Успех",
+                "Конфигурация успешно сохранена!"
+            )
+        except ConfigError as e:
+            QMessageBox.warning(
+                self,
+                "Ошибка сохранения",
+                f"Не удалось сохранить конфиг: {str(e)}"
             )
 
-            if self.config_manager.save_api_config(config):
-                QMessageBox.information(self, "Успех", "Конфигурация успешно сохранена!")
-        except Exception as e:
-            QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить конфигурацию: {str(e)}")
-
-    def get_oauth_token(self) -> str:
+    def get_auth_code(self) -> str:
         """Получение текущего OAuth токена"""
         return self.token_input.text().strip()

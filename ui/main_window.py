@@ -1,64 +1,84 @@
+"""Главное окно приложения для аналитики Яндекс.Метрики"""
+
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, List, Optional
 
 from PySide6.QtWidgets import (QMainWindow, QTabWidget, QVBoxLayout, QWidget,
-                               QHBoxLayout, QPushButton, QLabel, QFileDialog, QMessageBox)
-from PySide6.QtCore import Qt
+                               QHBoxLayout, QPushButton, QLabel, QFileDialog,
+                               QMessageBox)
+from PySide6.QtCore import Qt, Signal
 
 from core.api_client import MetrikaApiClient
 from core.data_processor import DataProcessor
 from core.excel_exporter import ExcelExporter
-from core.models import ReportParams
+from core.models import ReportParams, Location
 
 from .api_tab import ApiTab
 from .locations_tab import LocationsTab
 from .params_tab import ParamsTab
 
 
+@dataclass
+class MainWindowConfig:
+    """Конфигурация для главного окна"""
+    window_title: str = "Yandex.Metrika Analytics"
+    window_geometry: tuple = (300, 300, 800, 600)  # x, y, width, height
+    get_data_btn_text: str = "Получить данные"
+    export_btn_text: str = "Экспорт в Excel"
+    default_report_dir: Path = Path("temp/reports")
+    default_report_name: str = "metrika_report_{timestamp}.xlsx"
+    result_label_text: str = "Результаты будут отображены здесь"
+
+
 class MainWindow(QMainWindow):
-    def __init__(self, config_manager):
+    """Главное окно приложения"""
+
+    report_generated = Signal()  # Отправляет сигнал при успешной генерации отчёта
+
+    def __init__(self, config_manager, config: Optional[MainWindowConfig] = None):
         super().__init__()
         self.config_manager = config_manager
-        self.setWindowTitle("Аналитика Яндекс.Метрики")
-        self.setGeometry(300, 300, 800, 600)
-
+        self.ui_config = config or MainWindowConfig()
+        self.results: Dict[str, Dict] = {}
         self._init_ui()
 
-    def _init_ui(self):
-        """Инициализация пользовательского интерфейса"""
+    def _init_ui(self) -> None:
+        """Инициализация компонентов пользовательского интерфейса"""
+        self.setWindowTitle(self.ui_config.window_title)
+        self.setGeometry(*self.ui_config.window_geometry)
+
         main_widget = QWidget()
         main_layout = QVBoxLayout()
 
-        # Табы для разных режимов
+        # Вкладки
         self.tabs = QTabWidget()
-
-        # Создаем вкладки
         self.locations_tab = LocationsTab(self.config_manager)
         self.params_tab = ParamsTab()
         self.api_tab = ApiTab(self.config_manager)
 
-        # Добавляем вкладки
-        self.tabs.addTab(self.locations_tab, "Выбор локаций")
+        self.tabs.addTab(self.locations_tab, "Локации")
         self.tabs.addTab(self.params_tab, "Параметры запроса")
-        self.tabs.addTab(self.api_tab, "Подключение API")
+        self.tabs.addTab(self.api_tab, "Настройки API")
 
         main_layout.addWidget(self.tabs)
 
         # Кнопки действий
         action_layout = QHBoxLayout()
 
-        self.get_data_btn = QPushButton("Получить данные")
+        self.get_data_btn = QPushButton(self.ui_config.get_data_btn_text)
         self.get_data_btn.clicked.connect(self.get_metrika_data)
         action_layout.addWidget(self.get_data_btn)
 
-        self.export_btn = QPushButton("Экспорт в Excel")
+        self.export_btn = QPushButton(self.ui_config.export_btn_text)
         self.export_btn.clicked.connect(self.export_to_excel)
         action_layout.addWidget(self.export_btn)
 
         main_layout.addLayout(action_layout)
 
-        # Область для вывода результатов
-        self.result_label = QLabel("Результаты будут отображены здесь")
+        # Отображение результатов
+        self.result_label = QLabel(self.ui_config.result_label_text)
         self.result_label.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.result_label.setWordWrap(True)
         main_layout.addWidget(self.result_label)
@@ -66,139 +86,119 @@ class MainWindow(QMainWindow):
         main_widget.setLayout(main_layout)
         self.setCentralWidget(main_widget)
 
-    def get_metrika_data(self):
-        """Получение данных из Яндекс.Метрики"""
-        # Получаем OAuth токен из вкладки API
-        oauth_token = self.api_tab.get_oauth_token()
+    def get_metrika_data(self) -> None:
+        """Извлекает данные из API Яндекс.Метрики"""
+        oauth_token = self.api_tab.get_auth_code()
         if not oauth_token:
-            self._show_error("API токен не настроен! Пожалуйста, настройте API на соответствующей вкладке.")
+            self._show_error("API не настроен! Пожалуйста, настройте API на соответствующей вкладке.")
             self.tabs.setCurrentIndex(2)
             return
 
-        # Получаем выбранные локации
         locations = self.locations_tab.get_selected_locations()
         if not locations:
-            self._show_error("Выберите хотя бы один регион или город!")
+            self._show_error("Пожалуйста, выберите как минимум один регион или город!")
             return
 
-        # Получаем параметры отчета
-        report_params = self.params_tab.get_report_params(locations)
-        if not report_params.counter_id:
-            self._show_error("Введите ID счётчика!")
+        try:
+            report_params = self.params_tab.get_report_params(locations)
+        except ValueError as e:
+            self._show_error(str(e))
             return
 
-        # Создаем клиент API и получаем данные
         try:
             api_client = MetrikaApiClient(oauth_token)
             raw_data = api_client.get_data(report_params)
-
-            # Сохраняем raw_data для использования в экспорте
-            self.raw_data = raw_data
-
-            # Обрабатываем данные
-            self.results = {}
-            for location_key, data in raw_data.items():
-                # Находим соответствующий объект Location
-                location_obj = next((loc for loc in locations
-                                     if f"{loc.region} - {loc.name}" == location_key), None)
-                if not location_obj:
-                    continue
-
-                processed_data = DataProcessor.process_api_response(data, location_obj)
-                self.results[location_key] = {
-                    'data': processed_data,
-                    'totals': DataProcessor.calculate_totals(processed_data)
-                }
-
-            # Создаем клиент API и получаем данные
-            api_client = MetrikaApiClient(oauth_token)
-            raw_data = api_client.get_data(report_params)
-
-            # Логируем полученные данные
-            import json
-            print("Полученные данные из API:")
-            print(json.dumps(raw_data, indent=2, ensure_ascii=False))
-
-            with open('temp/api_response.json', 'w', encoding='utf-8') as f:
-                json.dump(raw_data, f, ensure_ascii=False, indent=2)
-
-            # Отображаем результаты
+            self._process_api_data(raw_data, locations)
             self._display_results(report_params)
-            self._show_info("Данные успешно получены!")
-
+            self._show_info("Данные успешно получены")
+            self.report_generated.emit()
         except Exception as e:
-            import traceback
-            print(f"Ошибка при получении данных: {str(e)}")
-            print(traceback.format_exc())
-            self._show_error(f"Ошибка при получении данных: {str(e)}")
+            self._show_error(f"Не удалось получить данные: {str(e)}")
 
-    def export_to_excel(self):
-        """Экспорт результатов в Excel файл"""
-        if not hasattr(self, "results") or not self.results:
-            self._show_error("Сначала получите данные!")
+    def _process_api_data(self, raw_data: Dict, locations: List[Location]) -> None:
+        """Обрабатывает данные ответа API."""
+        self.results = {}
+        for location_key, data in raw_data.items():
+            location_obj = next(
+                (loc for loc in locations
+                if f"{loc.region} - {loc.name}" == location_key),
+                None
+            )
+            if not location_obj:
+                continue
+
+            processed_data = DataProcessor.process_api_response(data, location_obj)
+            self.results[location_key] = {
+                'data': processed_data,
+                'totals': DataProcessor.calculate_totals(processed_data)
+            }
+
+    def export_to_excel(self) -> None:
+        """Экспорт отчёта в Excel."""
+        if not self.results:
+            self._show_error("Нет данных для экспорта. Пожалуйста, сперва получите данные.")
             return
 
-        # Получаем параметры отчета для дат и фильтров
-        locations = self.locations_tab.get_selected_locations()
-        report_params = self.params_tab.get_report_params(locations)
+        try:
+            locations = self.locations_tab.get_selected_locations()
+            report_params = self.params_tab.get_report_params(locations)
+        except ValueError as e:
+            self._show_error(str(e))
+            return
 
-        # Формируем строку фильтров
         filters = []
         if report_params.behavior == "human":
             filters.append("robots = 'no'")
         elif report_params.behavior == "robot":
             filters.append("robots = 'yes'")
-        filters_str = " AND ".join(filters) if filters else ""
 
-        # Запрашиваем путь для сохранения файла
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Сохранить отчет",
-            f"temp/reports/metrika_report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            "Excel Files (*.xlsx)"
+            "Сохранение отчёта",
+            str(self.ui_config.default_report_dir /
+                self.ui_config.default_report_name.format(
+                    timestamp=datetime.now().strftime("%Y%m%d_%H%M%S")
+                )),
+            "Excel Files (*.xlsx)",
         )
 
         if not file_path:
             return
 
-        # Экспортируем данные
-        exporter = ExcelExporter()
-        data_to_export = {
-            loc: res['data'] for loc, res in self.results.items()
-        }
+        try:
+            exporter = ExcelExporter()
+            exporter.export_report(
+                data={loc: res['data'] for loc, res in self.results.items()},
+                file_path=Path(file_path),
+                date_from=report_params.date_from.strftime("%Y-%m-%d"),
+                date_to=report_params.date_to.strftime("%Y-%m-%d"),
+                filters=" AND ".join(filters) if filters else "",
+            )
+            self._show_info(f"Отчет сохранён в {file_path}")
+        except Exception as e:
+            self._show_error(f"Не удалось экспортировать: {str(e)}")
 
-        # Передаем raw_data в экспортер
-        exporter.export_report(
-            data=data_to_export,
-            file_path=Path(file_path),
-            date_from=report_params.date_from.strftime("%Y-%m-%d"),
-            date_to=report_params.date_to.strftime("%Y-%m-%d"),
-            filters=filters_str,
-        )
-        self._show_info(f"Отчет сохранен в {file_path}")
-
-    def _display_results(self, params: ReportParams):
-        """Отображение результатов в интерфейсе"""
-        result_text = f"Данные за период с {params.date_from} по {params.date_to}: \n\n"
+    def _display_results(self, params: ReportParams) -> None:
+        """Отображает результат отчёта в пользовательском интерфейсе"""
+        result_text = f"Данные за период с {params.date_from} по {params.date_to}:\n\n"
 
         for location, data in self.results.items():
-            result_text += f"___ {location} ___\n"
+            result_text += f"--- {location} ---\n"
             result_text += f"Всего: {data['totals']['all']['visits']} посещений\n"
 
-            # Добавляем данные по источникам трафика
             if data['totals']['sources']:
-                result_text += f"\n По источникам трафика:\n"
+                result_text += "\nПо источникам трафика:\n"
                 for source, stats in data['totals']['sources'].items():
-                    result_text += f"- {source}: {stats['visits']} посещений ({round(stats['visits']/data['totals']['all']['visits']*100, 1)}%)\n"
+                    percentage = (stats['visits'] / data['totals']['all']['visits'] * 100
+                                  if data['totals']['all']['visits'] > 0 else 0)
+                    result_text += (f"- {source}: {stats['visits']} посещений "
+                                    f"({percentage:.2f}%)\n")
 
-            # Показываем первые 5 записей
             if data['data']:
-                result_text += f"\nПервые записи:\n"
+                result_text += "\nПримерные данные:\n"
                 for row in data['data'][:5]:
-                    result_text += (
-                        f"{row.date.strftime('%Y-%m-%d')} [{row.traffic_source}]: "
-                        f"{row.visits} посещений\n"
-                    )
+                    result_text += (f"{row.date.strftime('%Y-%m-%d')} "
+                                    f"[{row.traffic_source}]: {row.visits} посещений\n")
             else:
                 result_text += "Нет данных\n"
 
@@ -206,10 +206,10 @@ class MainWindow(QMainWindow):
 
         self.result_label.setText(result_text)
 
-    def _show_error(self, message: str):
-        """Показать сообщение об ошибке"""
+    def _show_error(self, message: str) -> None:
+        """Показывает сообщение об ошибке"""
         QMessageBox.critical(self, "Ошибка", message)
 
-    def _show_info(self, message: str):
-        """Показать информационное сообщение"""
+    def _show_info(self, message: str) -> None:
+        """Показывает информационное сообщение"""
         QMessageBox.information(self, "Информация", message)
