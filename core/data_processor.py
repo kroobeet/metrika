@@ -1,6 +1,8 @@
-from typing import Dict, List, Any
-from datetime import datetime
+"""Модуль для обработки необработанных ответов API в структурированные данные."""
+
 import logging
+from datetime import datetime
+from typing import Dict, List, Any, TypedDict
 
 from .models import ReportData, Location
 from .exceptions import DataProcessingError
@@ -9,143 +11,150 @@ from .exceptions import DataProcessingError
 logger = logging.getLogger(__name__)
 
 
+class TrafficSourceTotals(TypedDict):
+    """Определение типа для итоговых значений источников трафика."""
+    visits: int
+    users: int
+    pageviews: int
+
+
+class TrafficTotals(TypedDict):
+    """Определение типа для итоговых значений трафика"""
+    all: TrafficSourceTotals
+    sources: Dict[str, TrafficSourceTotals]
+
+
 class DataProcessor:
-    """Processes raw API responses into structured data."""
+    """Обрабатывает необработанные данные API в структурированные форматы"""
+
+    SOURCE_MAPPING = {
+        'organic': 'organic',
+        'direct': 'direct',
+        'ad': 'ad',
+        'internal': 'internal',
+        'referral': 'referral',
+        'recommendation': 'recommendation',
+        'social': 'social',
+    }
 
     @staticmethod
     def process_api_response(data: Dict[str, Any], location: Location) -> List[ReportData]:
-        """Process API response into list of ReportData objects.
+        """Преобразует ответ API в объекты ReportData.
 
         Args:
-            data: Raw API response data
-            location: Location associated with the data
+            data: Необработанный ответ API
+            location: Связанная локация
 
         Returns:
-            List of processed ReportData objects
+            Список обрабатываемых объектов ReportData
 
         Raises:
-            DataProcessingError: If data is invalid processing fails
+            DataProcessingError: Если обработка данных завершится сбоем
         """
-        processed_data = []
+        if not data.get('data'):
+            logger.warning("В API нет данных для %s", location.name)
+            return []
 
-        if not data['data']:
-            logger.warning("No data found in API response for %s", location.name)
-            return processed_data
+        processed_data = []
 
         for row in data['data']:
             try:
                 date_str = row['dimensions'][0]['name']
-                # Безопасное получение источника трафика (если есть)
-                traffic_source = row['dimensions'][1]['name'] if len(row['dimensions']) > 1 else None
-                date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+                traffic_source = (
+                    row['dimensions'][1]['name']
+                    if len(row['dimensions']) > 1
+                    else None
+                )
 
                 processed_data.append(ReportData(
                     location=location,
-                    date=date_obj,
+                    date=datetime.strptime(date_str, '%Y-%m-%d').date(),
                     visits=row['metrics'][0],
                     users=row['metrics'][1],
                     pageviews=row['metrics'][2],
-                    traffic_source=traffic_source
+                    traffic_source=traffic_source,
                 ))
             except (KeyError, IndexError, ValueError) as e:
-                error_msg = f"Skipping invalid data row: {str(e)}"
-                logger.error(error_msg)
-                raise DataProcessingError(error_msg) from e
+                logger.error("Invalid data row: %s", str(e), exc_info=True)
+                raise DataProcessingError(f"Invalid data row: {str(e)}") from e
 
         return processed_data
 
     @staticmethod
     def aggregate_traffic_data(raw_data: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
-        """Aggregate traffic data by city and source type.
+        """Агрегирует данные о трафике по городу и источнику трафика
 
         Args:
-            raw_data: Raw API response data
+            raw_data: Необработанные данные ответа API
 
         Returns:
-            Dictionary with city names as keys and traffic source counts as values
+            Словарь с названиями городов и количеством источников трафика
         """
-
         def extract_city_name(full_name: str) -> str:
-            """Extract city name from full region-city string"""
-            parts = full_name.split(' - ')
-            return parts[-1] if len(parts) > 1 else full_name
+            """Извлекает название города из полной строки регион-город"""
+            return full_name.split(' - ')[-1]
 
         traffic_data = {}
 
-        # Initialize data structure for all cities
-        for region_city in raw_data.keys():
+        # Инициализация структуры данных
+        for region_city in raw_data:
             city = extract_city_name(region_city)
             traffic_data[city] = {
-                "organic": 0,  # Поисковые системы
-                "direct": 0,  # Прямые заходы
-                "ad": 0,  # Реклама
-                "internal": 0,  # Внутренние переходы
-                "referral": 0,  # Ссылки
-                "recommendation": 0,  # Рекомендации
-                "social": 0  # Соцсети
+                "organic": 0,
+                "direct": 0,
+                "ad": 0,
+                "internal": 0,
+                "referral": 0,
+                "recommendation": 0,
+                "social": 0
             }
 
-        # Process data for all cities
+        # Обработка данных
         for region_city, region_data in raw_data.items():
             city = extract_city_name(region_city)
             for item in region_data["data"]:
-                if len(item["dimensions"]) > 1:  # Check if traffic source exists
-                    traffic_type = item["dimensions"][1]["id"]
+                if len(item["dimensions"]) > 1:
+                    traffic_type = item["dimensions"][1]['id']
                     visits = item["metrics"][0]
                     if traffic_type in traffic_data[city]:
                         traffic_data[city][traffic_type] += visits
 
         return traffic_data
 
-    @staticmethod
-    def calculate_totals(data: List[ReportData]) -> Dict[str, Dict[str, int]]:
-        """Calculate totals from processed data.
+    @classmethod
+    def calculate_totals(cls, data: List[ReportData]) -> TrafficTotals:
+        """Рассчитывает итоговые значения на основе обработанных данных.
 
         Args:
-            data: List of ReportData objects
+            data: Список объектов ReportData
 
         Returns:
-            Dictionary with calculated totals for all data and by traffic source
+            Словарь с рассчитанными итоговыми значениями
         """
-        totals = {
+        totals: TrafficTotals = {
             'all': {'visits': 0, 'users': 0, 'pageviews': 0},
             'sources': {}
         }
 
-        SOURCE_MAPPING = {
-            'organic': 'organic',
-            'direct': 'direct',
-            'ad': 'ad',
-            'internal': 'internal',
-            'referral': 'referral',
-            'recommendation': 'recommendation',
-            'social': 'social'
-        }
-
         for item in data:
-            try:
-                # Update overall totals
-                totals['all']['visits'] += item.visits
-                totals['all']['users'] += item.users
-                totals['all']['pageviews'] += item.pageviews
+            # Обновляем общие итоги
+            totals['all']['visits'] += item.visits
+            totals['all']['users'] += item.users
+            totals['all']['pageviews'] += item.pageviews
 
-                # Update source-specific totals
-                source = getattr(item, 'traffic_source', None)
-                if source in SOURCE_MAPPING:
-                    mapped_source = SOURCE_MAPPING[source]
+            # Обновляем итоговые данные по конкретным источникам
+            if item.traffic_source in cls.SOURCE_MAPPING:
+                source = cls.SOURCE_MAPPING[item.traffic_source]
 
-                    if mapped_source not in totals['sources']:
-                        totals['sources'][mapped_source] = {
-                            'visits': 0,
-                            'users': 0,
-                            'pageviews': 0
-                        }
+                if source not in totals['sources']:
+                    totals['sources'][source] = {
+                        'visits': 0,
+                        'users': 0,
+                        'pageviews': 0
+                    }
 
-                    totals['sources'][mapped_source]['visits'] += item.visits
-                    totals['sources'][mapped_source]['users'] += item.users
-                    totals['sources'][mapped_source]['pageviews'] += item.pageviews
-            except (KeyError, IndexError, ValueError) as e:
-                error_msg = f"Failed to calculate totals: {str(e)}"
-                logger.error(error_msg)
-                raise DataProcessingError(error_msg) from e
+                totals['sources'][source]['visits'] += item.visits
+                totals['sources'][source]['users'] += item.users
+                totals['sources'][source]['pageviews'] += item.pageviews
+
         return totals
